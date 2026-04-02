@@ -35,7 +35,7 @@ def client_with_url():
 
 @pytest_asyncio.fixture
 async def authenticated_client(respx_mock: MockRouter, client_with_url: WallabagClient):
-    respx_mock.get(MOCK_OAUTH_URL).mock(
+    respx_mock.post(MOCK_OAUTH_URL).mock(
         return_value=httpx.Response(
             200,
             json={"access_token": "test_access_token", "expires_in": 3600, "token_type": "Bearer"},
@@ -71,7 +71,7 @@ class TestWallabagClientInitialization:
 @pytest.mark.asyncio
 class TestWallabagClientAuthentication:
     async def test_authenticate_success_with_args(self, respx_mock: MockRouter, client_with_url: WallabagClient):
-        respx_mock.get(url__regex=rf"{MOCK_OAUTH_URL}\?.*").mock(
+        respx_mock.post(MOCK_OAUTH_URL).mock(
             return_value=httpx.Response(
                 200,
                 json={"access_token": "test_token_args", "expires_in": 3600, "token_type": "Bearer"},
@@ -86,13 +86,15 @@ class TestWallabagClientAuthentication:
 
         called_request = respx_mock.calls.last.request
         assert called_request is not None
-        assert (
-            called_request.url.query.decode()
-            == "grant_type=password&client_id=cid&client_secret=csecret&username=user&password=pw"
-        )
+        body = called_request.content.decode()
+        assert "grant_type=password" in body
+        assert "client_id=cid" in body
+        assert "client_secret=csecret" in body
+        assert "username=user" in body
+        assert "password=pw" in body
 
     async def test_authenticate_success_with_env_vars(self, respx_mock: MockRouter, mock_env_vars: None):  # type: ignore
-        respx_mock.get(url__regex=rf"{MOCK_OAUTH_URL}\?.*").mock(
+        respx_mock.post(MOCK_OAUTH_URL).mock(
             return_value=httpx.Response(
                 200,
                 json={"access_token": "test_token_env", "expires_in": 3600, "token_type": "Bearer"},
@@ -107,12 +109,12 @@ class TestWallabagClientAuthentication:
 
         called_request = respx_mock.calls.last.request
         assert called_request is not None
-        query_params_str = called_request.url.query.decode()
-        assert "grant_type=password" in query_params_str
-        assert "client_id=test_client_id_env" in query_params_str
-        assert "client_secret=test_client_secret_env" in query_params_str
-        assert "username=test_user_env" in query_params_str
-        assert "password=test_pass_env" in query_params_str
+        body = called_request.content.decode()
+        assert "grant_type=password" in body
+        assert "client_id=test_client_id_env" in body
+        assert "client_secret=test_client_secret_env" in body
+        assert "username=test_user_env" in body
+        assert "password=test_pass_env" in body
 
     async def test_authenticate_missing_args_raises_config_error(
         self, client_with_url: WallabagClient, monkeypatch: MonkeyPatch
@@ -134,7 +136,7 @@ class TestWallabagClientAuthentication:
     async def test_authenticate_api_failure_raises_auth_error(
         self, respx_mock: MockRouter, client_with_url: WallabagClient
     ):
-        respx_mock.get(url__regex=rf"{MOCK_OAUTH_URL}\?.*").mock(
+        respx_mock.post(MOCK_OAUTH_URL).mock(
             return_value=httpx.Response(500, text="Internal Server Error")
         )
         with pytest.raises(WallabagAuthError, match="Authentication failed: API request failed: 500"):
@@ -143,14 +145,14 @@ class TestWallabagClientAuthentication:
     async def test_authenticate_json_decode_error_raises_auth_error(
         self, respx_mock: MockRouter, client_with_url: WallabagClient
     ):
-        respx_mock.get(url__regex=rf"{MOCK_OAUTH_URL}\?.*").mock(return_value=httpx.Response(200, text="not json"))
+        respx_mock.post(MOCK_OAUTH_URL).mock(return_value=httpx.Response(200, text="not json"))
         with pytest.raises(WallabagAuthError, match="Failed to parse authentication response"):
             await client_with_url.authenticate("id", "secret", "user", "pass")
 
     async def test_authenticate_no_access_token_raises_auth_error(
         self, respx_mock: MockRouter, client_with_url: WallabagClient
     ):
-        respx_mock.get(url__regex=rf"{MOCK_OAUTH_URL}\?.*").mock(
+        respx_mock.post(MOCK_OAUTH_URL).mock(
             return_value=httpx.Response(200, json={"message": "success but no token"})
         )
         with pytest.raises(WallabagAuthError, match="Authentication successful, but no access token received"):
@@ -195,7 +197,7 @@ class TestWallabagClientGetArticles:
     }
 
     async def test_get_articles_success(self, respx_mock: MockRouter, authenticated_client: WallabagClient):
-        req = ArticlesRequest()
+        req = GetArticlesRequest()
 
         respx_mock.get(url__regex=rf"{MOCK_API_URL}/entries\?.*").mock(
             return_value=httpx.Response(200, json=self.MOCK_ARTICLES_PAYLOAD)  # type: ignore
@@ -232,7 +234,7 @@ class TestWallabagClientGetArticles:
         self, respx_mock: MockRouter, authenticated_client: WallabagClient
     ):
         since_dt = datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-        req = ArticlesRequest(is_archived=True, since=since_dt, domain="test.dev", count=5, sort_order="asc")
+        req = GetArticlesRequest(is_archived=True, since=since_dt, domain="test.dev", count=5, sort_order="asc")
 
         respx_mock.get(url__regex=rf"{MOCK_API_URL}/entries\?.*").mock(
             return_value=httpx.Response(200, json={"_embedded": {"items": []}})  # Empty for this test
@@ -253,12 +255,13 @@ class TestWallabagClientGetArticles:
     async def test_get_articles_req_count_is_none_uses_default_perpage(
         self, respx_mock: MockRouter, authenticated_client: WallabagClient
     ):
-        # ArticlesRequest.count defaults to None
-        req = ArticlesRequest(count=None)  # Explicitly None, though default
+        # GetArticlesRequest.count defaults to None
+        req = GetArticlesRequest(count=None)  # Explicitly None, though default
         respx_mock.get(url__regex=rf"{MOCK_API_URL}/entries\?.*").mock(
             return_value=httpx.Response(200, json={"_embedded": {"items": []}})
         )
         await authenticated_client.get_articles(req)
         called_request = respx_mock.calls.last.request
         assert called_request is not None
-        # Your client code defaults to "100" if req.count is None or 0
+        query_params = called_request.url.query.decode()
+        assert "perPage=100" in query_params

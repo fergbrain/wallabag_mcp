@@ -133,7 +133,7 @@ class WallabagClient:
             )
 
         try:
-            response = await self._request("GET", url, params=data)
+            response = await self._request("POST", url, data=data)
             token_data = response.json()
         except JSONDecodeError as e:
             raise WallabagAuthError(f"Failed to parse authentication response: {e}") from e

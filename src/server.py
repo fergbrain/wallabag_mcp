@@ -1,3 +1,4 @@
+import asyncio
 from typing import Literal
 from fastmcp import FastMCP
 from dotenv import load_dotenv
@@ -23,6 +24,15 @@ async def initialize_client():
 
 
 client: WallabagClient | None = None
+_client_lock = asyncio.Lock()
+
+
+async def get_client() -> WallabagClient:
+    global client
+    async with _client_lock:
+        if client is None:
+            client = await initialize_client()
+    return client
 
 
 @mcp.tool()
@@ -33,15 +43,12 @@ async def get_single_wallabag_article(id: int) -> str:
     Args:
         id: The ID of the article to fetch (required)
     """
-    global client
-
-    if client is None:
-        client = await initialize_client()
+    wallabag = await get_client()
 
     try:
         request = GetSingleArticleRequest(id=id)
 
-        article = await client.get_single_article(request)
+        article = await wallabag.get_single_article(request)
 
         # Format response for MCP
         return json.dumps(
@@ -77,10 +84,7 @@ async def get_wallabag_articles(
         sort_order: The order in which to sort the articles. 'desc' is newest first, 'asc' is oldest first. (optional)
         include_content: Return the article content. Metadata like title, reading time, and URL is always returned. (default: False)
     """
-    global client
-
-    if client is None:
-        client = await initialize_client()
+    wallabag = await get_client()
 
     try:
         # Build the request
@@ -99,7 +103,7 @@ async def get_wallabag_articles(
             include_content=include_content,
         )
 
-        articles = await client.get_articles(request)
+        articles = await wallabag.get_articles(request)
 
         # Format response for MCP
         articles_data = [article.model_dump() for article in articles]
@@ -124,15 +128,12 @@ async def search_articles(
         search_term: The text to search for
         count: The number of search results to return (optional)
     """
-    global client
-
-    if client is None:
-        client = await initialize_client()
+    wallabag = await get_client()
 
     try:
         request = SearchArticlesRequest(search_term=search_term, count=count)
 
-        articles = await client.search_articles(request)
+        articles = await wallabag.search_articles(request)
 
         # Format response for MCP
         articles_data = [article.model_dump() for article in articles]
