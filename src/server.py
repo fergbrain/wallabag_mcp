@@ -1,6 +1,6 @@
 import asyncio
 from typing import Literal
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 import json
 from wallabag_client import GetArticlesRequest, GetSingleArticleRequest, SearchArticlesRequest, WallabagClient
@@ -36,7 +36,7 @@ async def get_client() -> WallabagClient:
 
 
 @mcp.tool()
-async def get_single_wallabag_article(id: int) -> str:
+async def get_single_wallabag_article(id: str) -> str:
     """
     Get a single saved article from the user's Wallabag queue.
 
@@ -46,7 +46,7 @@ async def get_single_wallabag_article(id: int) -> str:
     wallabag = await get_client()
 
     try:
-        request = GetSingleArticleRequest(id=id)
+        request = GetSingleArticleRequest(id=int(id))
 
         article = await wallabag.get_single_article(request)
 

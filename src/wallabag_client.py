@@ -168,7 +168,7 @@ class WallabagClient:
         except WallabagApiError:
             raise
 
-        articles_data = response_data.get("_embedded", {}).get("items", [])
+        articles_data = response_data.get("items", response_data.get("_embedded", {}).get("items", []))
 
         return [Article(**article) for article in articles_data]
 
