@@ -1,3 +1,4 @@
+import asyncio
 from json import JSONDecodeError
 from typing import Optional, List, Literal, Any, Dict
 import httpx
@@ -32,6 +33,10 @@ class WallabagApiError(WallabagError):
 
 class GetSingleArticleRequest(BaseModel):
     id: int = Field(description="The ID of the article to fetch")
+
+
+class CheckUrlsRequest(BaseModel):
+    urls: List[str] = Field(description="List of URLs to check for existence in Wallabag")
 
 
 class SearchArticlesRequest(BaseModel):
@@ -189,6 +194,85 @@ class WallabagClient:
             raise
 
         return Article(**response_data)
+
+    async def check_urls(self, req: CheckUrlsRequest) -> Dict[str, Dict[str, Any]]:
+        if not self.access_token:
+            raise WallabagAuthError("Access token is not set. Please authenticate first.")
+
+        # Primary check: /api/entries/exists uses an indexed hashed_url column (fast).
+        # Entries created before the hashed_url migration are invisible to this endpoint,
+        # so we fall back to a search-based lookup for any URL it misses.
+        exists_url = f"{self.base_url}/api/entries/exists"
+        params: Dict[str, Any] = {"return_id": "1", "urls[]": req.urls}
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+
+        try:
+            response = await self._request("GET", exists_url, headers=headers, params=params)
+            exists_data: Dict[str, Any] = response.json()
+        except JSONDecodeError as e:
+            raise WallabagApiError(f"Failed to parse URL existence response: {e}") from e
+        except WallabagApiError:
+            raise
+
+        # When return_id=1, each value is the entry ID (int) or false/null if not found
+        found_by_exists: Dict[str, int] = {u: eid for u, eid in exists_data.items() if eid}
+        missed_urls = [u for u in req.urls if u not in found_by_exists]
+
+        # Fallback: search for each missed URL and confirm by exact URL match
+        fallback_articles: Dict[str, Article] = {}
+        if missed_urls:
+            search_results = await asyncio.gather(
+                *[self._search_for_url(u) for u in missed_urls],
+                return_exceptions=True,
+            )
+            for input_url, result in zip(missed_urls, search_results):
+                if isinstance(result, Article):
+                    fallback_articles[input_url] = result
+
+        # Fetch article details for IDs found via exists (deduplicated)
+        unique_ids = list({v for v in found_by_exists.values()})
+        fetched_articles: Dict[int, Article] = {}
+        if unique_ids:
+            fetch_results = await asyncio.gather(
+                *[self.get_single_article(GetSingleArticleRequest(id=aid)) for aid in unique_ids],
+                return_exceptions=True,
+            )
+            for aid, result in zip(unique_ids, fetch_results):
+                if isinstance(result, Article):
+                    fetched_articles[aid] = result
+
+        output: Dict[str, Dict[str, Any]] = {}
+        for input_url in req.urls:
+            entry_id = found_by_exists.get(input_url)
+            if entry_id:
+                article = fetched_articles.get(entry_id)
+                output[input_url] = {
+                    "exists": True,
+                    "id": entry_id,
+                    "matched_url": article.url if article else None,
+                    "title": article.title if article else None,
+                }
+            elif input_url in fallback_articles:
+                article = fallback_articles[input_url]
+                output[input_url] = {
+                    "exists": True,
+                    "id": article.id,
+                    "matched_url": article.url,
+                    "title": article.title,
+                }
+            else:
+                output[input_url] = {"exists": False, "id": None, "matched_url": None, "title": None}
+
+        return output
+
+    async def _search_for_url(self, url: str) -> Optional[Article]:
+        """Search for an article by URL as a fallback for entries missing hashed_url."""
+        articles = await self.search_articles(SearchArticlesRequest(search_term=url, count=10))
+        normalized = url.rstrip("/")
+        for article in articles:
+            if article.url.rstrip("/") == normalized:
+                return article
+        return None
 
     async def get_articles(self, req: GetArticlesRequest) -> List[Article]:
         if not self.access_token:

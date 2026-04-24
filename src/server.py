@@ -3,7 +3,7 @@ from typing import Literal
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 import json
-from wallabag_client import GetArticlesRequest, GetSingleArticleRequest, SearchArticlesRequest, WallabagClient
+from wallabag_client import CheckUrlsRequest, GetArticlesRequest, GetSingleArticleRequest, SearchArticlesRequest, WallabagClient
 
 load_dotenv()
 
@@ -143,6 +143,26 @@ async def search_articles(
             default=str,
         )
 
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool()
+async def check_urls(urls: list[str]) -> str:
+    """Check whether a list of URLs have already been saved in the user's Wallabag.
+
+    Returns a mapping from each input URL to its existence status, Wallabag entry ID,
+    the URL as stored in Wallabag (which may differ after redirects), and the article title.
+
+    Args:
+        urls: List of URLs to check
+    """
+    wallabag = await get_client()
+
+    try:
+        request = CheckUrlsRequest(urls=urls)
+        results = await wallabag.check_urls(request)
+        return json.dumps({"success": True, "results": results}, indent=2, default=str)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
